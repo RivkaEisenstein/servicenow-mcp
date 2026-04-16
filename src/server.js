@@ -44,10 +44,17 @@ app.use(express.json());
 // SECURITY: API Key Authentication
 // ============================================
 const API_KEY = process.env.MCP_API_KEY;
+const REQUIRE_API_KEY = process.env.MCP_REQUIRE_API_KEY !== 'false'; // Default: true
+
+if (!API_KEY && REQUIRE_API_KEY) {
+  console.error('🚫 FATAL: MCP_API_KEY is required but not set!');
+  console.error('   Set MCP_API_KEY in .env file, or set MCP_REQUIRE_API_KEY=false for development only.');
+  process.exit(1);
+}
 
 if (!API_KEY) {
   console.warn('⚠️  WARNING: MCP_API_KEY not set. Server is running WITHOUT authentication!');
-  console.warn('   Set MCP_API_KEY in .env file for production use.');
+  console.warn('   This is only acceptable in isolated development environments.');
 }
 
 // Authentication middleware
@@ -57,7 +64,7 @@ const authenticateRequest = (req, res, next) => {
     return next();
   }
 
-  // If no API key configured, allow (backward compatible but warned)
+  // If no API key configured (development mode only)
   if (!API_KEY) {
     return next();
   }

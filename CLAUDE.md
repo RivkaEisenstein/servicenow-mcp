@@ -107,19 +107,20 @@ All tools support the `instance` parameter for routing to specific ServiceNow in
 
 ```json
 {
+  "_SECURITY_NOTICE": "Use environment variable placeholders - NEVER commit credentials!",
   "instances": [
     {
       "name": "dev",
-      "url": "https://dev123.service-now.com",
-      "username": "admin",
-      "password": "password",
+      "url": "${SERVICENOW_DEV_URL}",
+      "username": "${SERVICENOW_DEV_USERNAME}",
+      "password": "${SERVICENOW_DEV_PASSWORD}",
       "default": true
     },
     {
       "name": "prod",
-      "url": "https://prod456.service-now.com",
-      "username": "integration",
-      "password": "password"
+      "url": "${SERVICENOW_PROD_URL}",
+      "username": "${SERVICENOW_PROD_USERNAME}",
+      "password": "${SERVICENOW_PROD_PASSWORD}"
     }
   ]
 }
@@ -546,7 +547,7 @@ const incidents = SN-NL-Search({
 for (const inc of incidents) {
   SN-Assign-Incident({
     sys_id: inc.sys_id,
-    assigned_to: "admin",
+    assigned_to: "john.smith",  // Use user_name or sys_id, NOT admin accounts
     assignment_group: "Network Support",
     instance: "dev"
   });

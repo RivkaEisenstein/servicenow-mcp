@@ -1918,49 +1918,110 @@ Please verify:
           const { script, description } = args;
 
           // ============================================
-          // SECURITY: Script Validation
+          // SECURITY: Script Execution Controls
           // ============================================
           
-          // Define dangerous patterns that should be blocked or flagged
-          const DANGEROUS_PATTERNS = [
-            { pattern: /\.deleteMultiple\(\)/i, reason: 'Mass delete operation' },
-            { pattern: /deleteRecord\s*\(\s*\)(?!\s*;?\s*\/\/)/i, reason: 'Bulk delete without filter' },
-            { pattern: /user_password|password_hash|user_password_hash/i, reason: 'Password field access' },
-            { pattern: /GlideSysAttachment.*write|writeFile/i, reason: 'File system write' },
-            { pattern: /Packages\.java\./i, reason: 'Java package access' },
-            { pattern: /eval\s*\(/i, reason: 'Dynamic code evaluation' },
-            { pattern: /gs\.sleep\s*\(\s*\d{5,}\s*\)/i, reason: 'Long sleep (potential DoS)' },
-          ];
-
-          // Require description for audit trail
-          if (!description || description.trim().length < 5) {
+          // Check if script execution is disabled
+          const SCRIPT_EXECUTION_ENABLED = process.env.ENABLE_SCRIPT_EXECUTION !== 'false';
+          if (!SCRIPT_EXECUTION_ENABLED) {
             return {
               content: [{
                 type: 'text',
-                text: `❌ Script execution blocked: Description is required for audit purposes.
+                text: `🚫 Script execution is DISABLED in this environment.
 
-Please provide a 'description' parameter (minimum 5 characters) explaining what this script does.
+This is a security measure. To enable script execution:
+1. Set ENABLE_SCRIPT_EXECUTION=true in your .env file
+2. Restart the server
+
+⚠️ WARNING: Enabling script execution allows arbitrary code to run on your ServiceNow instance.
+Only enable this in trusted, controlled environments with proper audit logging.`
+              }]
+            };
+          }
+          
+          // Define dangerous patterns that should be BLOCKED (not just warned)
+          const BLOCKED_PATTERNS = [
+            { pattern: /\.deleteMultiple\(\)/i, reason: 'Mass delete operation - use UI for bulk deletes' },
+            { pattern: /sys_user\.user_password|password_hash/i, reason: 'Direct password field access is blocked' },
+            { pattern: /Packages\.java\./i, reason: 'Java package access is blocked for security' },
+            { pattern: /GlideHTTPPublic|new sn_ws\.RESTMessageV2/i, reason: 'External HTTP calls require review' },
+          ];
+
+          // Define warning patterns (allowed but logged)
+          const WARNING_PATTERNS = [
+            { pattern: /deleteRecord\s*\(\s*\)/i, reason: 'Delete operation detected' },
+            { pattern: /GlideSysAttachment/i, reason: 'Attachment manipulation' },
+            { pattern: /eval\s*\(/i, reason: 'Dynamic code evaluation' },
+            { pattern: /gs\.sleep\s*\(\s*\d{4,}\s*\)/i, reason: 'Sleep operation (potential DoS)' },
+            { pattern: /GlideRecord\(['"]sys_/i, reason: 'System table access' },
+          ];
+
+          // Require description for audit trail
+          if (!description || description.trim().length < 10) {
+            return {
+              content: [{
+                type: 'text',
+                text: `❌ Script execution blocked: Detailed description is required for audit purposes.
+
+Please provide a 'description' parameter (minimum 10 characters) explaining:
+- What the script does
+- Why it's needed
+- Expected outcome
 
 Example:
 {
   "script": "gs.info('Hello');",
-  "description": "Test script to verify execution"
+  "description": "Test script to verify MCP-to-ServiceNow connection is working"
 }`
               }]
             };
           }
 
-          // Check for dangerous patterns
+          // Check for BLOCKED patterns (these prevent execution)
+          for (const { pattern, reason } of BLOCKED_PATTERNS) {
+            if (pattern.test(script)) {
+              // Generate script hash for audit
+              const crypto = await import('crypto');
+              const scriptHash = crypto.createHash('sha256').update(script).digest('hex').substring(0, 16);
+              
+              console.error(`🚫 AUDIT: Script execution BLOCKED`);
+              console.error(`   Reason: ${reason}`);
+              console.error(`   Script hash: ${scriptHash}`);
+              console.error(`   Timestamp: ${new Date().toISOString()}`);
+              
+              return {
+                content: [{
+                  type: 'text',
+                  text: `🚫 Script execution BLOCKED for security reasons.
+
+Reason: ${reason}
+
+If this operation is required, please:
+1. Execute it directly in ServiceNow's Scripts - Background
+2. Or contact your ServiceNow administrator
+
+Script hash for audit: ${scriptHash}`
+                }]
+              };
+            }
+          }
+
+          // Check for warning patterns
           const warnings = [];
-          for (const { pattern, reason } of DANGEROUS_PATTERNS) {
+          for (const { pattern, reason } of WARNING_PATTERNS) {
             if (pattern.test(script)) {
               warnings.push(`⚠️ ${reason}`);
             }
           }
 
-          // Log execution for audit trail
+          // Generate script hash for audit logging
+          const crypto = await import('crypto');
+          const scriptHash = crypto.createHash('sha256').update(script).digest('hex').substring(0, 16);
+
+          // Log execution for audit trail (structured logging)
           console.error(`📝 AUDIT: Script execution requested`);
           console.error(`   Description: ${description}`);
+          console.error(`   Script hash: ${scriptHash}`);
           console.error(`   Script length: ${script.length} chars`);
           console.error(`   Timestamp: ${new Date().toISOString()}`);
           console.error(`   Script preview: ${script.substring(0, 100).replace(/\n/g, ' ')}...`);

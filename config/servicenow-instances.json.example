@@ -1,28 +1,21 @@
 {
+  "_SECURITY_NOTICE": "NEVER commit real credentials! Use environment variable placeholders: ${VAR_NAME}",
   "instances": [
     {
       "name": "dev",
-      "url": "https://dev276360.service-now.com",
-      "username": "admin",
-      "password": "$h4fG+9nAGeU",
+      "url": "${SERVICENOW_DEV_URL}",
+      "username": "${SERVICENOW_DEV_USERNAME}",
+      "password": "${SERVICENOW_DEV_PASSWORD}",
       "default": true,
-      "description": "Development instance"
+      "description": "Development instance - use dedicated service account with least privilege"
     },
     {
       "name": "prod",
-      "url": "https://yourinstance.service-now.com",
-      "username": "api_user",
-      "password": "your_password",
+      "url": "${SERVICENOW_PROD_URL}",
+      "username": "${SERVICENOW_PROD_USERNAME}",
+      "password": "${SERVICENOW_PROD_PASSWORD}",
       "default": false,
-      "description": "Production instance"
-    },
-    {
-      "name": "test",
-      "url": "https://test123456.service-now.com",
-      "username": "test_user",
-      "password": "test_password",
-      "default": false,
-      "description": "Test instance"
+      "description": "Production instance - use dedicated service account with least privilege"
     }
   ]
 }
