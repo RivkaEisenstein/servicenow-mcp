@@ -8,13 +8,17 @@
  */
 
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ServiceNowClient } from './servicenow-client.js';
 import { createMcpServer } from './mcp-server-consolidated.js';
 import { configManager } from './config-manager.js';
 
-// Load environment variables
-dotenv.config();
+// Load .env from the project root (parent of src/), regardless of process cwd.
+// This is required when the server is launched as an MCP subprocess by Claude Code.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 async function main() {
   try {

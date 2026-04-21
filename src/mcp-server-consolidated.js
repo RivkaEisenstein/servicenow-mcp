@@ -1282,6 +1282,26 @@ export async function createMcpServer(serviceNowClient) {
           // Switch the client to the new instance
           serviceNowClient.setInstance(instance.url, instance.username, instance.password, instance.name);
 
+          // Validate credentials immediately — reject early if wrong
+          try {
+            await serviceNowClient.validateCredentials();
+          } catch (authErr) {
+            // Revert to previous instance config so the server stays usable
+            const previous = configManager.getInstance(configManager.getDefaultInstance().name);
+            serviceNowClient.setInstance(previous.url, previous.username, previous.password, previous.name);
+            console.error(`❌ Instance switch FAILED (reverted): ${authErr.message}`);
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  error: authErr.message,
+                  reverted_to: previous.name
+                }, null, 2)
+              }]
+            };
+          }
+
           console.error(`🔄 Switched to instance: ${instance.name} (${instance.url})`);
 
           return {
@@ -1939,19 +1959,33 @@ Only enable this in trusted, controlled environments with proper audit logging.`
             };
           }
           
+          // Hard limit on script size to prevent DoS
+          const MAX_SCRIPT_LENGTH = 10000;
+          if (script.length > MAX_SCRIPT_LENGTH) {
+            return {
+              content: [{
+                type: 'text',
+                text: `🚫 Script execution BLOCKED: Script exceeds maximum allowed length of ${MAX_SCRIPT_LENGTH} characters (got ${script.length}).`
+              }]
+            };
+          }
+
           // Define dangerous patterns that should be BLOCKED (not just warned)
           const BLOCKED_PATTERNS = [
             { pattern: /\.deleteMultiple\(\)/i, reason: 'Mass delete operation - use UI for bulk deletes' },
             { pattern: /sys_user\.user_password|password_hash/i, reason: 'Direct password field access is blocked' },
             { pattern: /Packages\.java\./i, reason: 'Java package access is blocked for security' },
             { pattern: /GlideHTTPPublic|new sn_ws\.RESTMessageV2/i, reason: 'External HTTP calls require review' },
+            { pattern: /eval\s*\(/i, reason: 'Dynamic code evaluation (eval) is blocked' },
+            { pattern: /gs\.setProperty\s*\(/i, reason: 'Modifying system properties via script is blocked' },
+            { pattern: /GlideRecord\(['"](sys_user|sys_user_role|sys_security_acl|oauth_credential|sys_credentials)['"]\)/i, reason: 'Direct access to privileged system tables via script is blocked' },
+            { pattern: /gs\.getSession\(\)\.putClientData/i, reason: 'Session manipulation is blocked' },
           ];
 
           // Define warning patterns (allowed but logged)
           const WARNING_PATTERNS = [
             { pattern: /deleteRecord\s*\(\s*\)/i, reason: 'Delete operation detected' },
             { pattern: /GlideSysAttachment/i, reason: 'Attachment manipulation' },
-            { pattern: /eval\s*\(/i, reason: 'Dynamic code evaluation' },
             { pattern: /gs\.sleep\s*\(\s*\d{4,}\s*\)/i, reason: 'Sleep operation (potential DoS)' },
             { pattern: /GlideRecord\(['"]sys_/i, reason: 'System table access' },
           ];

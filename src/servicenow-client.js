@@ -161,18 +161,41 @@ export class ServiceNowClient {
   }
 
   /**
-   * Switch to a different ServiceNow instance
-   * @param {string} instanceUrl - Instance URL
-   * @param {string} username - Username
-   * @param {string} password - Password
-   * @param {string} instanceName - Optional instance name for tracking
+   * Switch to a different ServiceNow instance.
+   * Supports Basic auth (default) and Bearer token auth via SERVICENOW_AUTH_TYPE.
+   *
+   * @param {string} instanceUrl   - Instance URL (must be HTTPS)
+   * @param {string} username      - Username (Basic) or client_id (OAuth)
+   * @param {string} password      - Password (Basic) or access token (Bearer)
+   * @param {string} instanceName  - Optional name for tracking
+   * @param {string} authType      - 'basic' (default) | 'bearer' | 'token'
    */
-  setInstance(instanceUrl, username, password, instanceName = null) {
+  setInstance(instanceUrl, username, password, instanceName = null, authType = null) {
     // SECURITY: Validate URL before connecting
     this.validateInstanceUrl(instanceUrl);
 
-    this.instanceUrl = instanceUrl.replace(/\/$/, ''); // Remove trailing slash
-    this.auth = Buffer.from(`${username}:${password}`).toString('base64');
+    this.instanceUrl = instanceUrl.replace(/\/$/, '');
+
+    // Resolve auth type: param → instance env var → global env var → basic
+    const resolvedAuthType = (
+      authType ||
+      process.env.SERVICENOW_AUTH_TYPE ||
+      'basic'
+    ).toLowerCase();
+
+    let authHeader;
+    if (resolvedAuthType === 'bearer' || resolvedAuthType === 'token') {
+      // Bearer / OAuth2 token auth — password field holds the access token
+      if (!password) {
+        throw new Error('SECURITY: Bearer auth requires an access token (pass it as the password parameter or set SERVICENOW_TOKEN env var).');
+      }
+      const token = password || process.env.SERVICENOW_TOKEN;
+      authHeader = `Bearer ${token}`;
+    } else {
+      // Default: Basic auth
+      this.auth = Buffer.from(`${username}:${password}`).toString('base64');
+      authHeader = `Basic ${this.auth}`;
+    }
 
     if (instanceName) {
       this.currentInstanceName = instanceName;
@@ -181,11 +204,26 @@ export class ServiceNowClient {
     this.client = axios.create({
       baseURL: this.instanceUrl,
       headers: {
-        'Authorization': `Basic ${this.auth}`,
+        'Authorization': authHeader,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       }
     });
+  }
+
+  /**
+   * Verify credentials by making a lightweight authenticated request.
+   * Throws on 401 / 403.
+   */
+  async validateCredentials() {
+    try {
+      await this.client.get('/api/now/table/sys_properties?sysparm_limit=1&sysparm_fields=name');
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 401) throw new Error('SECURITY: Authentication failed — invalid username or password/token.');
+      if (status === 403) throw new Error('SECURITY: Authorization failed — user lacks required permissions.');
+      throw err;
+    }
   }
 
   /**
