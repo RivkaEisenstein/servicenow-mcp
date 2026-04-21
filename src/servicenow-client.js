@@ -7,6 +7,15 @@
 
 import axios from 'axios';
 
+// Escapes a string for safe embedding as a single-quoted JS string literal
+function escapeForJS(str) {
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
 // ============================================
 // SECURITY: Table Access Control
 // ============================================
@@ -374,7 +383,7 @@ gr.name = 'sys_update_set';
 gr.value = updateSetId;
 gr.insert();
 
-gs.info('✅ Update set changed to: ${updateSet.name}');`;
+gs.info('✅ Update set changed to: ${escapeForJS(updateSet.name)}');`;
 
       const result = await this.executeScriptViaTrigger(script, `Set update set to: ${updateSet.name}`, true);
       return {

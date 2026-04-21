@@ -2975,8 +2975,7 @@ The problem has been closed successfully.`
           description: 'Consolidated ServiceNow integration with metadata-driven schema lookups'
         },
         instance_info: {
-          url: process.env.SERVICENOW_INSTANCE_URL,
-          username: process.env.SERVICENOW_USERNAME
+          url: process.env.SERVICENOW_INSTANCE_URL
         },
         capabilities: {
           total_tables: Object.keys(tableMetadata).length,

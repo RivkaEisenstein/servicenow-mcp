@@ -78,7 +78,9 @@ const authenticateRequest = (req, res, next) => {
   }
 
   // SECURITY: Use timing-safe comparison to prevent timing attacks
-  if (!crypto.timingSafeEqual(Buffer.from(providedKey), Buffer.from(API_KEY))) {
+  const a = Buffer.from(providedKey);
+  const b = Buffer.from(API_KEY);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
     console.warn(`🚫 Unauthorized request to ${req.path} - invalid API key`);
     return res.status(403).json({ error: 'Invalid API key' });
   }

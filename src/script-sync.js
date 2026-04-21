@@ -15,6 +15,7 @@
  */
 
 import fs from 'fs/promises';
+import { realpathSync } from 'fs';
 import path from 'path';
 import chokidar from 'chokidar';
 
@@ -38,7 +39,19 @@ function validateFilePath(filePath) {
       `SECURITY: file_path '${filePath}' resolves outside the allowed directory. Use relative paths within the working directory.`
     );
   }
-  return resolved;
+  // Follow symlinks to prevent traversal via symlink pointing outside allowed dir
+  try {
+    const real = realpathSync(resolved);
+    if (!real.startsWith(SAFE_BASE_DIR + path.sep) && real !== SAFE_BASE_DIR) {
+      throw new Error(
+        `SECURITY: file_path '${filePath}' resolves via symlink outside the allowed directory.`
+      );
+    }
+    return real;
+  } catch (err) {
+    if (err.code === 'ENOENT') return resolved; // New file — can't resolve yet
+    throw err;
+  }
 }
 
 /**
