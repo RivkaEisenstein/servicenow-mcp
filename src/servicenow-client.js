@@ -53,6 +53,11 @@ const DANGEROUS_QUERY_PATTERNS = [
 // Max query length to prevent DoS
 const MAX_QUERY_LENGTH = 2000;
 
+// Table name must be snake_case (letters, digits, underscores, starting with a letter).
+// This prevents path-traversal and injection via the table name used in REST URLs.
+const TABLE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+const MAX_TABLE_NAME_LENGTH = 80;
+
 export class ServiceNowClient {
   constructor(instanceUrl, username, password) {
     this.currentInstanceName = 'default';
@@ -79,6 +84,74 @@ export class ServiceNowClient {
   }
 
   /**
+   * Validate an instance URL to prevent SSRF attacks.
+   * Blocks non-HTTPS, private IPs, localhost, and cloud metadata endpoints.
+   * @param {string} url - Instance URL to validate
+   * @throws {Error} If the URL is unsafe
+   */
+  validateInstanceUrl(url) {
+    if (!url || typeof url !== 'string') {
+      throw new Error('SECURITY: Instance URL must be a non-empty string.');
+    }
+    if (!url.toLowerCase().startsWith('https://')) {
+      throw new Error('SECURITY: Instance URL must use HTTPS.');
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error('SECURITY: Invalid instance URL format.');
+    }
+
+    const host = parsed.hostname.toLowerCase();
+
+    // Block localhost
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+      throw new Error('SECURITY: Instance URL cannot point to localhost.');
+    }
+
+    // Block cloud metadata and link-local endpoints
+    const BLOCKED_HOSTS = [
+      '169.254.169.254',       // AWS / Azure metadata
+      'metadata.google.internal', // GCP metadata
+      'metadata.internal'
+    ];
+    if (BLOCKED_HOSTS.includes(host)) {
+      throw new Error('SECURITY: Instance URL points to a blocked internal endpoint.');
+    }
+
+    // Block private IPv4 ranges
+    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4) {
+      const [, a, b] = ipv4.map(Number);
+      const isPrivate =
+        a === 10 ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        a === 127 ||
+        (a === 169 && b === 254);
+      if (isPrivate) {
+        throw new Error('SECURITY: Instance URL cannot point to a private IP address.');
+      }
+    }
+  }
+
+  /**
+   * Validate a sys_id to ensure it is a 32-character hex string.
+   * @param {string} sysId - sys_id to validate
+   * @throws {Error} If the format is invalid
+   */
+  validateSysId(sysId) {
+    if (!sysId || typeof sysId !== 'string') {
+      throw new Error('Invalid sys_id: must be a non-empty string.');
+    }
+    if (!/^[0-9a-f]{32}$/i.test(sysId)) {
+      throw new Error('Invalid sys_id format: must be a 32-character hexadecimal string.');
+    }
+  }
+
+  /**
    * Switch to a different ServiceNow instance
    * @param {string} instanceUrl - Instance URL
    * @param {string} username - Username
@@ -86,6 +159,9 @@ export class ServiceNowClient {
    * @param {string} instanceName - Optional instance name for tracking
    */
   setInstance(instanceUrl, username, password, instanceName = null) {
+    // SECURITY: Validate URL before connecting
+    this.validateInstanceUrl(instanceUrl);
+
     this.instanceUrl = instanceUrl.replace(/\/$/, ''); // Remove trailing slash
     this.auth = Buffer.from(`${username}:${password}`).toString('base64');
 
@@ -125,7 +201,18 @@ export class ServiceNowClient {
    * @throws {Error} If table is blocked
    */
   validateTableAccess(table, operation = 'read') {
-    const normalizedTable = table.toLowerCase().trim();
+    if (!table || typeof table !== 'string') {
+      throw new Error('SECURITY: Table name must be a non-empty string.');
+    }
+
+    // Enforce snake_case format — blocks path-traversal (../../) and injection via the URL
+    if (table.length > MAX_TABLE_NAME_LENGTH || !TABLE_NAME_REGEX.test(table)) {
+      throw new Error(
+        `SECURITY: Invalid table name '${table}'. Only alphanumeric characters and underscores are allowed, starting with a letter.`
+      );
+    }
+
+    const normalizedTable = table.toLowerCase();
 
     // Check blocked tables
     if (BLOCKED_TABLES.has(normalizedTable)) {
@@ -181,8 +268,9 @@ export class ServiceNowClient {
   }
 
   async getRecord(table, sysId, queryParams = {}) {
-    // SECURITY: Validate table access
+    // SECURITY: Validate table access and sys_id format
     this.validateTableAccess(table, 'read');
+    this.validateSysId(sysId);
 
     const params = new URLSearchParams();
     if (queryParams.sysparm_fields) params.append('sysparm_fields', queryParams.sysparm_fields);
@@ -205,16 +293,18 @@ export class ServiceNowClient {
   }
 
   async updateRecord(table, sysId, data) {
-    // SECURITY: Validate table access for write
+    // SECURITY: Validate table access and sys_id format for write
     this.validateTableAccess(table, 'write');
+    this.validateSysId(sysId);
 
     const response = await this.client.put(`/api/now/table/${table}/${sysId}`, data);
     return response.data.result;
   }
 
   async deleteRecord(table, sysId) {
-    // SECURITY: Validate table access for write (delete)
+    // SECURITY: Validate table access and sys_id format for delete
     this.validateTableAccess(table, 'write');
+    this.validateSysId(sysId);
 
     await this.client.delete(`/api/now/table/${table}/${sysId}`);
     return { success: true };
@@ -383,7 +473,7 @@ gs.info('✅ Update set changed to: ${updateSet.name}');`;
           const currentAppId = verifyResponse.data.result.value;
           verified = (currentAppId === appSysId);
           if (!verified) {
-            verificationError = `Verification failed: Current app is ${currentAppId}, expected ${appSysId}`;
+            verificationError = 'Verification failed: Application scope did not update as expected.';
           }
         }
       } catch (verifyError) {
@@ -440,7 +530,7 @@ gs.info('✅ Update set changed to: ${updateSet.name}');`;
 
       const enhancedError = new Error(`Failed to set current application: ${errorMessage}`);
       enhancedError.execution_time_ms = executionTime;
-      enhancedError.app_sys_id = appSysId;
+      // Note: app_sys_id intentionally omitted from the error object to avoid disclosure
       enhancedError.original_error = error;
 
       throw enhancedError;

@@ -18,6 +18,29 @@ import fs from 'fs/promises';
 import path from 'path';
 import chokidar from 'chokidar';
 
+// Safe base directory for all file operations — must stay within cwd
+const SAFE_BASE_DIR = process.cwd();
+
+/**
+ * Validate a file path to prevent path traversal attacks.
+ * Resolves the path and ensures it stays inside SAFE_BASE_DIR.
+ * @param {string} filePath - User-supplied file path
+ * @returns {string} Resolved absolute path
+ * @throws {Error} If the path escapes the allowed directory
+ */
+function validateFilePath(filePath) {
+  if (!filePath || typeof filePath !== 'string') {
+    throw new Error('SECURITY: file_path must be a non-empty string.');
+  }
+  const resolved = path.resolve(SAFE_BASE_DIR, filePath);
+  if (!resolved.startsWith(SAFE_BASE_DIR + path.sep) && resolved !== SAFE_BASE_DIR) {
+    throw new Error(
+      `SECURITY: file_path '${filePath}' resolves outside the allowed directory. Use relative paths within the working directory.`
+    );
+  }
+  return resolved;
+}
+
 /**
  * Supported script types with their ServiceNow table mappings
  */
@@ -116,6 +139,9 @@ export function generateFileName(scriptName, scriptType) {
 export async function syncScript(serviceNowClient, options) {
   const { script_name, script_type, file_path, direction, instance } = options;
 
+  // SECURITY: Validate file path before any fs operation
+  const resolvedFilePath = validateFilePath(file_path);
+
   // Validate script type
   const scriptConfig = SCRIPT_TYPES[script_type];
   if (!scriptConfig) {
@@ -125,7 +151,7 @@ export async function syncScript(serviceNowClient, options) {
   const result = {
     script_name,
     script_type,
-    file_path,
+    file_path: resolvedFilePath,
     direction: null,
     success: false,
     timestamp: new Date().toISOString(),
@@ -137,7 +163,7 @@ export async function syncScript(serviceNowClient, options) {
     let syncDirection = direction;
     if (!syncDirection) {
       try {
-        await fs.access(file_path);
+        await fs.access(resolvedFilePath);
         syncDirection = 'push'; // File exists, push to ServiceNow
       } catch {
         syncDirection = 'pull'; // File doesn't exist, pull from ServiceNow
@@ -177,21 +203,21 @@ export async function syncScript(serviceNowClient, options) {
 ${scriptContent}`;
 
       // Ensure directory exists
-      const dir = path.dirname(file_path);
+      const dir = path.dirname(resolvedFilePath);
       await fs.mkdir(dir, { recursive: true });
 
       // Write file
-      await fs.writeFile(file_path, fileContent, 'utf-8');
+      await fs.writeFile(resolvedFilePath, fileContent, 'utf-8');
 
       result.success = true;
       result.sys_id = record.sys_id;
-      result.message = `Successfully pulled script from ServiceNow to ${file_path}`;
+      result.message = `Successfully pulled script from ServiceNow to ${resolvedFilePath}`;
 
     } else if (syncDirection === 'push') {
       // Push from local file to ServiceNow
       let fileContent;
       try {
-        fileContent = await fs.readFile(file_path, 'utf-8');
+        fileContent = await fs.readFile(resolvedFilePath, 'utf-8');
       } catch (error) {
         throw new Error(`Failed to read file: ${error.message}`);
       }
@@ -223,7 +249,7 @@ ${scriptContent}`;
 
       result.success = true;
       result.sys_id = record.sys_id;
-      result.message = `Successfully pushed script from ${file_path} to ServiceNow`;
+      result.message = `Successfully pushed script from ${resolvedFilePath} to ServiceNow`;
 
     } else {
       throw new Error(`Invalid direction: ${syncDirection}. Must be 'push' or 'pull'.`);
@@ -250,8 +276,11 @@ ${scriptContent}`;
 export async function syncAllScripts(serviceNowClient, options) {
   const { directory, script_types, instance } = options;
 
+  // SECURITY: Validate directory path before any fs operation
+  const resolvedDirectory = validateFilePath(directory);
+
   const result = {
-    directory,
+    directory: resolvedDirectory,
     script_types: script_types || Object.keys(SCRIPT_TYPES),
     total_files: 0,
     synced: 0,
@@ -262,10 +291,10 @@ export async function syncAllScripts(serviceNowClient, options) {
 
   try {
     // Ensure directory exists
-    await fs.mkdir(directory, { recursive: true });
+    await fs.mkdir(resolvedDirectory, { recursive: true });
 
     // Read all files in directory
-    const files = await fs.readdir(directory);
+    const files = await fs.readdir(resolvedDirectory);
 
     // Filter for script files matching our naming convention
     const scriptFiles = files.filter(file => {
@@ -285,7 +314,7 @@ export async function syncAllScripts(serviceNowClient, options) {
     // Sync each file
     for (const file of scriptFiles) {
       const parsed = parseFileName(file);
-      const filePath = path.join(directory, file);
+      const filePath = path.join(resolvedDirectory, file);
 
       try {
         const syncResult = await syncScript(serviceNowClient, {
@@ -340,11 +369,14 @@ export async function syncAllScripts(serviceNowClient, options) {
 export function watchScripts(serviceNowClient, options) {
   const { directory, script_type, auto_sync = true, onSync, instance } = options;
 
+  // SECURITY: Validate directory path before watching
+  const resolvedDirectory = validateFilePath(directory);
+
   // Track files being synced to prevent duplicate syncs
   const syncingFiles = new Set();
 
   // Create watcher
-  const watcher = chokidar.watch(directory, {
+  const watcher = chokidar.watch(resolvedDirectory, {
     ignored: /(^|[\/\\])\../, // Ignore dot files
     persistent: true,
     ignoreInitial: true,

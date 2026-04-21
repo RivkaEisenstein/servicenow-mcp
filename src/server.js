@@ -89,8 +89,25 @@ const authenticateRequest = (req, res, next) => {
 // Apply authentication to all routes
 app.use(authenticateRequest);
 
-// In-memory session store (sessionId -> {server, transport})
+// In-memory session store (sessionId -> {server, transport, keepaliveInterval, createdAt, lastActivity})
 const sessions = {};
+
+// Session timeout: default 30 minutes of inactivity
+const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || String(30 * 60 * 1000), 10);
+
+// Purge expired sessions every minute
+const sessionCleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, session] of Object.entries(sessions)) {
+    if (now - session.lastActivity > SESSION_TIMEOUT_MS) {
+      clearInterval(session.keepaliveInterval);
+      delete sessions[sessionId];
+      console.log(`🧹 Session timed out and removed: ${sessionId}`);
+    }
+  }
+}, 60 * 1000);
+// Don't keep the process alive just for cleanup
+sessionCleanupInterval.unref();
 
 // Get default instance configuration
 const defaultInstance = configManager.getDefaultInstance();
@@ -160,8 +177,9 @@ app.get('/mcp', async (req, res) => {
       clearInterval(keepaliveInterval);
     });
 
-    // Store the session
-    sessions[transport.sessionId] = { server, transport, keepaliveInterval };
+    // Store the session with timestamps for expiry tracking
+    const now = Date.now();
+    sessions[transport.sessionId] = { server, transport, keepaliveInterval, createdAt: now, lastActivity: now };
     console.log(`🔗 New session established: ${transport.sessionId}`);
 
     // connect() starts the transport automatically in current MCP SDK
@@ -188,9 +206,10 @@ app.post('/mcp', async (req, res) => {
       });
     }
 
-    const { transport } = sessions[sessionId];
+    const session = sessions[sessionId];
+    session.lastActivity = Date.now(); // Refresh expiry on activity
     // express.json() already consumed the stream, so pass parsed body
-    await transport.handlePostMessage(req, res, req.body);
+    await session.transport.handlePostMessage(req, res, req.body);
 
   } catch (error) {
     console.error('❌ Error handling POST message:', error);

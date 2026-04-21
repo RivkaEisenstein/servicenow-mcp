@@ -49,6 +49,11 @@ COPY README.md ./
 # Create directory for config
 RUN mkdir -p /app/config
 
+# SECURITY: Run as non-root user to limit blast radius if compromised
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup && \
+    chown -R appuser:appgroup /app
+USER appuser
+
 # Expose HTTP server port (for SSE transport)
 EXPOSE 3000
 
